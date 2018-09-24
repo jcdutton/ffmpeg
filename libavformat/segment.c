@@ -186,6 +186,39 @@ static int segment_mux_init(AVFormatContext *s)
     return 0;
 }
 
+static int mkdir_p(const char *path) {
+    int ret = 0;
+    char *temp = av_strdup(path);
+    char *pos = temp;
+    char tmp_ch = '\0';
+
+    if (!path || !temp) {
+        return -1;
+    }
+
+    if (!strncmp(temp, "/", 1) || !strncmp(temp, "\\", 1)) {
+        pos++;
+    } else if (!strncmp(temp, "./", 2) || !strncmp(temp, ".\\", 2)) {
+        pos += 2;
+    }
+
+    for ( ; *pos != '\0'; ++pos) {
+        if (*pos == '/' || *pos == '\\') {
+            tmp_ch = *pos;
+            *pos = '\0';
+            ret = mkdir(temp, 0755);
+            *pos = tmp_ch;
+        }
+    }
+
+    if ((*(pos - 1) != '/') || (*(pos - 1) != '\\')) {
+        ret = mkdir(temp, 0755);
+    }
+
+    av_free(temp);
+    return ret;
+}
+
 static int set_segment_filename(AVFormatContext *s)
 {
     SegmentContext *seg = s->priv_data;
@@ -200,12 +233,27 @@ static int set_segment_filename(AVFormatContext *s)
     if (seg->use_strftime) {
         time_t now0;
         struct tm *tm, tmpbuf;
+        const char *dir;
+        char *fn_copy;
         time(&now0);
         tm = localtime_r(&now0, &tmpbuf);
         if (!strftime(buf, sizeof(buf), s->url, tm)) {
             av_log(oc, AV_LOG_ERROR, "Could not get segment filename with strftime\n");
             return AVERROR(EINVAL);
         }
+        /* Automatically create directories if needed */
+        /* E.g. %Y/%m/%d/%Y-%m-%d_%H-%M-%S.mkv */
+        fn_copy = av_strdup(buf);
+        if (!fn_copy) {
+            return AVERROR(ENOMEM);
+        }
+        dir = av_dirname(fn_copy);
+        if (mkdir_p(dir) == -1 && errno != EEXIST) {
+            av_log(oc, AV_LOG_ERROR, "Could not create directory %s with use_localtime_mkdir\n", dir);
+            av_free(fn_copy);
+            return AVERROR(errno);
+        }
+        av_free(fn_copy);
     } else if (av_get_frame_filename(buf, sizeof(buf),
                                      s->url, seg->segment_idx) < 0) {
         av_log(oc, AV_LOG_ERROR, "Invalid segment filename template '%s'\n", s->url);
